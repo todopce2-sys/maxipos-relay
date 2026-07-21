@@ -132,3 +132,8 @@ def health():
         "clientes_conectados": len(connections),
         "cuits": list(connections.keys()),
     }
+
+
+@app.get("/ping")
+def ping():
+    return {"status": "ok"}
