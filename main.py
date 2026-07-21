@@ -135,5 +135,6 @@ def health():
 
 
 @app.get("/ping")
+@app.head("/ping")
 def ping():
     return {"status": "ok"}
