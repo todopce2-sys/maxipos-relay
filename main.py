@@ -57,10 +57,13 @@ async def ws_maxipos(websocket: WebSocket, cuit: str):
                 if not future.done():
                     future.set_result(msg)
     except WebSocketDisconnect:
-        connections.pop(cuit, None)
+        # No eliminar una conexiÃ³n nueva al cerrarse una anterior del mismo CUIT.
+        if connections.get(cuit) is websocket:
+            connections.pop(cuit, None)
         log.info(f"[-] MaxiPOS desconectado CUIT={cuit}  total={len(connections)}")
     except Exception as e:
-        connections.pop(cuit, None)
+        if connections.get(cuit) is websocket:
+            connections.pop(cuit, None)
         log.warning(f"[!] Error WS CUIT={cuit}: {e}")
 
 
