@@ -12,9 +12,12 @@ Flujo:
 import asyncio
 import json
 import logging
+import os
+import time
 import uuid
 from typing import Dict, Optional
 
+import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -38,6 +41,32 @@ connections: Dict[str, WebSocket] = {}
 pending: Dict[str, asyncio.Future] = {}
 
 TIMEOUT_SECS = 20
+LICENCIAS_URL = os.getenv("LICENCIAS_URL", "https://maxipos-licencias.onrender.com").rstrip("/")
+WEB_ACCESS_CACHE_SECS = 15
+web_access_cache: Dict[str, tuple[float, dict]] = {}
+
+
+async def obtener_acceso_web(cuit: str) -> dict | None:
+    """Consulta la vigencia del adicional y conserva una cache corta por CUIT."""
+    cacheado = web_access_cache.get(cuit)
+    ahora = time.monotonic()
+    if cacheado and cacheado[0] > ahora:
+        return cacheado[1]
+
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            respuesta = await client.get(
+                f"{LICENCIAS_URL}/licencia/web-acceso",
+                params={"cuit": cuit},
+            )
+        respuesta.raise_for_status()
+        acceso = respuesta.json()
+    except (httpx.HTTPError, ValueError) as error:
+        log.warning("No se pudo verificar MaxiPOS Web para CUIT=%s: %s", cuit, error)
+        return None
+
+    web_access_cache[cuit] = (ahora + WEB_ACCESS_CACHE_SECS, acceso)
+    return acceso
 
 
 # ── WebSocket: MaxiPOS desktop se conecta acá ─────────────────────────────────
@@ -74,6 +103,18 @@ async def ws_maxipos(websocket: WebSocket, cuit: str):
     methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
 )
 async def proxy(cuit: str, path: str, request: Request):
+    acceso = await obtener_acceso_web(cuit)
+    if acceso is None:
+        raise HTTPException(
+            status_code=503,
+            detail="No se pudo verificar la licencia de MaxiPOS Web. Intentá nuevamente.",
+        )
+    if not acceso.get("habilitado"):
+        raise HTTPException(
+            status_code=403,
+            detail=acceso.get("mensaje") or "El adicional MaxiPOS Web no está activo.",
+        )
+
     ws = connections.get(cuit)
     if not ws:
         raise HTTPException(
